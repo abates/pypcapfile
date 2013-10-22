@@ -25,6 +25,32 @@ def __TRACE__(msg, args=None):
             print msg
 
 
+class pcap_iter(object):
+    def __init__(self, file_h, layers=0, verbose=False):
+        global VERBOSE
+        VERBOSE = verbose
+
+        __TRACE__('[+] attempting to load %s', (file_h.name, ))
+
+        self.header = _load_savefile_header(file_h)
+        if __validate_header__(self.header):
+            __TRACE__('[+] found valid header')
+        else:
+            raise Exception("invalid savefile")
+
+        self.layers = layers
+        self.file_h = file_h
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        hdrp = ctypes.pointer(self.header)
+        pkt = _read_a_packet(self.file_h, hdrp, self.layers)
+        if not pkt:
+            raise StopIteration
+        return pkt
+
 class pcap_savefile(object):
     """
     Represents a libpcap savefile. The packets member is a list of pcap_packet
@@ -79,16 +105,20 @@ def _load_savefile_header(file_h):
 Load and validate the header of a pcap file.
     """
     raw_savefile_header = file_h.read(24)
+    unpacked = None
     if raw_savefile_header[:4] == '\xa1\xb2\xc3\xd4':
         byte_order = 'big'
+        unpacked = struct.unpack('>IHHiIII', raw_savefile_header)
     elif raw_savefile_header[:4] == '\xd4\xc3\xb2\xa1':
         byte_order = 'little'
+        unpacked = struct.unpack('<IHHiIII', raw_savefile_header)
     else:
         byte_order = None
-    unpacked = struct.unpack('=IhhIIII', raw_savefile_header)
     (magic, major, minor, tz_off, ts_acc, snaplen, ll_type) = unpacked
     header = __pcap_header__(magic, major, minor, tz_off, ts_acc, snaplen,
                              ll_type, ctypes.c_char_p(byte_order))
+
+    __TRACE__('[+] Read file header: 0x%x %d.%d packet snapshot length %d LL Type %d', (header.magic, header.major, header.minor, header.snaplen, header.ll_type))
     if not __validate_header__(header):
         raise Exception('invalid savefile header!')
     else:
@@ -173,7 +203,11 @@ def _read_a_packet(file_h, hdrp, layers=0):
         return None
     assert len(raw_packet_header) == 16, 'Unexpected end of per-packet header.'
 
-    packet_header = struct.unpack('=IIII', raw_packet_header)
+    if __endian_check__(hdrp):
+        packet_header = struct.unpack('>IIII', raw_packet_header)
+    else:
+        packet_header = struct.unpack('<IIII', raw_packet_header)
+
     (timestamp, timestamp_ms, capture_len, packet_len) = packet_header
     raw_packet_data = file_h.read(capture_len)
 
@@ -181,7 +215,7 @@ def _read_a_packet(file_h, hdrp, layers=0):
     # reverse the packet data
     if not __endian_check__(hdrp):
         raw_packet_data = raw_packet_data[::-1]
-    assert len(raw_packet_data) == capture_len, 'Unexpected end of packet.'
+    assert len(raw_packet_data) == capture_len, "Unexpected end of packet. Expected %d got %d" % (capture_len, len(raw_packet_data))
 
     if layers > 0:
         layers -= 1
