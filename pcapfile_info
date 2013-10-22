@@ -19,4 +19,4 @@ def pcap_info(pcap_file):
         print 'Invalid packet capture!'
 
 if __name__ == '__main__':
-    pcap_info(sys.argv[1])
+    pcap_info(open(sys.argv[1]))
